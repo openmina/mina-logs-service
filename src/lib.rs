@@ -1,3 +1,4 @@
 pub mod server;
-mod types;
-mod tar;
+pub mod types;
+pub mod tar;
+pub mod log;

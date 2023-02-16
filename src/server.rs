@@ -7,49 +7,51 @@ use warp::{
 };
 
 #[derive(Debug)]
-enum TarError {
+enum ServiceError {
+    LogsDirNotFound(String),
     IO(std::io::Error),
     Http(warp::http::Error),
 }
 
-impl From<std::io::Error> for TarError {
+impl From<std::io::Error> for ServiceError {
     fn from(source: std::io::Error) -> Self {
-        TarError::IO(source)
+        ServiceError::IO(source)
     }
 }
 
-impl From<warp::http::Error> for TarError {
+impl From<warp::http::Error> for ServiceError {
     fn from(source: warp::http::Error) -> Self {
-        TarError::Http(source)
+        ServiceError::Http(source)
     }
 }
 
-impl Reject for TarError {}
+impl Reject for ServiceError {}
 
 async fn tar(dir: PathBuf) -> Result<Response<Vec<u8>>, warp::Rejection> {
-    let body = super::tar::tar_files(&dir.as_path(), Vec::new())
+    let log = crate::log::log().unwrap();
+    let body = super::tar::tar_files(&dir.as_path(), Vec::new(), log.clone())
         .await
         .map_err(|err| {
-            eprintln!("error: {err}");
-            warp::reject::custom(TarError::IO(err))
+            slog::error!(log, "error: {err}");
+            warp::reject::custom(ServiceError::IO(err))
         })?;
     let response = Response::builder()
         .header("content-type", "application/x-tar")
         .body(body)
         .map_err(|err| {
-            eprintln!("error: {err}");
-            warp::reject::custom(TarError::Http(err))
+            slog::error!(log, "error: {err}");
+            warp::reject::custom(ServiceError::Http(err))
         })?;
     Ok(response)
 }
 
 async fn handle_rejection(err: warp::Rejection) -> Result<Box<dyn warp::Reply>, Infallible> {
-    let (code, message) = if let Some(TarError::IO(err)) = err.find() {
+    let (code, message) = if let Some(ServiceError::IO(err)) = err.find() {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("tar error: {err}"),
         )
-    } else if let Some(TarError::Http(err)) = err.find() {
+    } else if let Some(ServiceError::Http(err)) = err.find() {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("response error: {err}"),
