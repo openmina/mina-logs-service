@@ -1,0 +1,26 @@
+kind: pipeline
+name: build-image
+type: docker
+trigger:
+  event: [ push ]
+  branch: [ main ]
+
+steps:
+
+- name: test
+#  image: rust:alpine
+  image: rust
+  commands:
+#    - apk add musl-dev openssl-dev
+    - cargo test
+
+- name: publish
+  image: plugins/docker
+  settings:
+    password:
+      from_secret: docker_hub_password
+    repo: openmina/mina-logs-service
+    tags:
+    - ${DRONE_COMMIT_SHA:0:8}
+    username:
+      from_secret: docker_hub_username
