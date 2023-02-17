@@ -12,12 +12,14 @@ struct Cli {
     address: SocketAddr,
     #[arg(short, long)]
     dir: PathBuf,
+    #[arg(short, long, default_value_t = String::from("download"))]
+    tar_file_prefix: String,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let server = server::serve(cli.dir).await;
+    let server = server::serve(cli.dir, cli.tar_file_prefix).await;
     let (tx, rx) = oneshot::channel();
     let (addr, server) = server.bind_with_graceful_shutdown(cli.address, async {
         rx.await.ok();

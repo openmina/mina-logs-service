@@ -8,7 +8,6 @@ use warp::{
 
 #[derive(Debug)]
 enum ServiceError {
-    LogsDirNotFound(String),
     IO(std::io::Error),
     Http(warp::http::Error),
 }
@@ -27,21 +26,26 @@ impl From<warp::http::Error> for ServiceError {
 
 impl Reject for ServiceError {}
 
-async fn tar(dir: PathBuf) -> Result<Response<Vec<u8>>, warp::Rejection> {
-    let log = crate::log::log().unwrap();
-    let body = super::tar::tar_files(&dir.as_path(), Vec::new(), log.clone())
+async fn tar_with_rejection(
+    dir: PathBuf,
+    prefix: String,
+) -> Result<Response<Vec<u8>>, warp::Rejection> {
+    tar(dir, prefix)
         .await
-        .map_err(|err| {
-            slog::error!(log, "error: {err}");
-            warp::reject::custom(ServiceError::IO(err))
-        })?;
+        .map_err(|err| warp::reject::custom(err))
+}
+
+async fn tar(dir: PathBuf, prefix: String) -> Result<Response<Vec<u8>>, ServiceError> {
+    let log = crate::log::log().unwrap();
+
+    let body = super::tar::tar_files(&dir.as_path(), Vec::new(), log.clone()).await?;
     let response = Response::builder()
         .header("content-type", "application/x-tar")
-        .body(body)
-        .map_err(|err| {
-            slog::error!(log, "error: {err}");
-            warp::reject::custom(ServiceError::Http(err))
-        })?;
+        .header(
+            "content-disposition",
+            &format!("attachment; filename={prefix}.tar"),
+        )
+        .body(body)?;
     Ok(response)
 }
 
@@ -74,9 +78,14 @@ async fn handle_rejection(err: warp::Rejection) -> Result<Box<dyn warp::Reply>, 
 
 pub async fn serve(
     dir: PathBuf,
+    prefix: String,
 ) -> Server<impl Filter<Extract = (impl warp::Reply,), Error = Infallible> + Clone> {
     let with_path = warp::any().map(move || dir.clone());
-    let download = warp::path("download").and(with_path).and_then(tar);
+    let with_prefix = warp::any().map(move || prefix.clone());
+    let download = warp::path("download")
+        .and(with_path)
+        .and(with_prefix)
+        .and_then(tar_with_rejection);
 
     let paths = download.recover(handle_rejection);
 
@@ -99,7 +108,7 @@ mod tests {
         fs::write(dir.path().join("a.txt"), "file a".as_bytes()).await?;
         fs::write(dir.path().join("b.txt"), "file b".as_bytes()).await?;
 
-        let server = super::serve(dir.path().into()).await;
+        let server = super::serve(dir.path().into(), "file".into()).await;
         let (tx, rx) = oneshot::channel();
         let (addr, server) = server.bind_with_graceful_shutdown(([127, 0, 0, 1], 0), async {
             rx.await.ok();
@@ -136,7 +145,7 @@ mod tests {
     #[tokio::test]
     async fn incorrect_dir() -> anyhow::Result<()> {
         let dir = tempdir::TempDir::new("dir")?;
-        let server = super::serve(dir.path().join("/nonexisting-path")).await;
+        let server = super::serve(dir.path().join("/nonexisting-path"), "file".into()).await;
         let (tx, rx) = oneshot::channel();
         let (addr, server) = server.bind_with_graceful_shutdown(([127, 0, 0, 1], 0), async {
             rx.await.ok();
